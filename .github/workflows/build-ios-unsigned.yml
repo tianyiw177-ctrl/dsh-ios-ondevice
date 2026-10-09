@@ -98,6 +98,10 @@ jobs:
       - name: 构建 guest 根文件系统（Alpine + Node 22 + 原版 dsh）
         env:
           DSH_VERSION: ${{ matrix.dsh }}
+          # 10-09 与上游 9-30 的失败均为 npm SIGABRT（疑似 V8 堆溢出：
+          # 这棵"全 peer 互联"的依赖树由 --force 现解析，内存占用不可控）。
+          # runner 有 7GB 内存，放宽 Node 堆上限。
+          NODE_OPTIONS: --max-old-space-size=5120
         run: |
           if [ "$DSH_VERSION" = "pinned" ]; then unset DSH_VERSION; fi
           make rootfs

@@ -114,7 +114,7 @@ cp "$ROOT/rootfs/staging/package.json" stage/
 # the `--profile tui --dump-config` check in guest phase 3 -- evidence, not a
 # declaration. Whatever the looser resolution adds in size is pruned below.
 ( cd stage && npm install --os=linux --cpu=arm64 --libc=musl --ignore-scripts \
-    --no-audit --no-fund --force 2>&1 | tail -3 )
+    --no-audit --no-fund --force 2>&1 | tail -150 )
 
 log "Guest phase 1: packages"
 guest_phase "guest phase 1" "DSH-PHASE1-OK" <<'EOF'
