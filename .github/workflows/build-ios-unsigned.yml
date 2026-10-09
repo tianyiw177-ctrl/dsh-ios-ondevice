@@ -148,10 +148,18 @@ jobs:
         if: matrix.variant == 'web'
         run: |
           set +e
-          # 浏览器版：与 CLI 版同一个工程，按 app/AppDSH.xcconfig 头部注释给出的
-          # 命令行覆盖方式构建——PRODUCT_NAME/PRODUCT_BUNDLE_IDENTIFIER/
-          # DSH_DISPLAY_NAME 换成浏览器面，GCC_PREPROCESSOR_DEFINITIONS 去掉
-          # DSH_CLI_ONLY（DSHRootViewController 与 dsh-serve 因此编进 App）。
+          # 浏览器版：按 app/AppDSH.xcconfig 头部注释的说明，把该文件原地切到浏览器面。
+          # 注意：不能用 xcodebuild 命令行覆盖 GCC_PREPROCESSOR_DEFINITIONS——命令行设置
+          # 会作用于本次调用构建的所有目标，包括 libarchive 子工程，剥掉它的
+          # HAVE_CONFIG_H 后 archive_platform.h 会直接 #error（第一版 web 构建就是这么挂的）。
+          sed -i '' \
+            -e 's/^PRODUCT_NAME = DSHCLI$/PRODUCT_NAME = DSH/' \
+            -e 's/^PRODUCT_BUNDLE_IDENTIFIER = .*\.dshcli$/PRODUCT_BUNDLE_IDENTIFIER = $(DSH_BUNDLE_ID_PREFIX).dsh/' \
+            -e 's/^DSH_DISPLAY_NAME = .*$/DSH_DISPLAY_NAME = DSHIOS/' \
+            -e 's/^GCC_PREPROCESSOR_DEFINITIONS = \$(inherited) DSH_APP=1 DSH_CLI_ONLY=1$/GCC_PREPROCESSOR_DEFINITIONS = $(inherited) DSH_APP=1/' \
+            app/AppDSH.xcconfig
+          echo "--- 切换后的关键行 ---"
+          grep -E '^(PRODUCT_NAME|PRODUCT_BUNDLE_IDENTIFIER|DSH_DISPLAY_NAME|GCC_PREPROCESSOR_DEFINITIONS) ' app/AppDSH.xcconfig
           xcodebuild \
             -project DSH.xcodeproj \
             -scheme DSH \
@@ -159,10 +167,6 @@ jobs:
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -derivedDataPath build/dd \
-            PRODUCT_NAME=DSH \
-            PRODUCT_BUNDLE_IDENTIFIER=com.xnuapp.dsh \
-            DSH_DISPLAY_NAME=DSHIOS \
-            GCC_PREPROCESSOR_DEFINITIONS="DSH_APP=1" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
