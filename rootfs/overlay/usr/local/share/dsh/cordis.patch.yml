@@ -19,3 +19,14 @@
       danger-full-access:
         sandbox: danger-full-access
         approval: never
+
+# Same endpoint correction as the terminal profile (the full note, including
+# the on-device 404 measurement, lives in tui.patch.yml): the guest reaches the
+# model through the app's loopback forwarder, whose root URL lacks the
+# /anthropic namespace the Messages protocol lives under. config.baseURL
+# outranks $DEEPSEEK_BASE_URL, and the environment-file route is closed by
+# dsh-app-boot's BOOTSTRAP_NAMES, so this row is the supported place for it.
+# The row ships with no config of its own in dsh-base, so nothing is dropped.
+- id: llm-deepseek
+  config:
+    baseURL: !!js "process.env.DEEPSEEK_BASE_URL ? process.env.DEEPSEEK_BASE_URL + '/anthropic' : undefined"

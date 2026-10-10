@@ -90,8 +90,34 @@
 # startup open, and the user watched three screens in sequence with a terminal
 # that took no input. A bounded budget still covers a real outage (about two
 # minutes of retries at these delays) and always hands control back.
+# Endpoint: the Messages protocol lives under /anthropic, and on device the
+# loopback root alone is not enough.
+#
+# dsh 0.2.x's DeepSeek adapter speaks the Messages protocol: its own default
+# base is https://api.deepseek.com/anthropic and every model request is
+# <base>/v1/messages. On device every model request goes through the app's
+# loopback forwarder -- the guest's sockets reach loopback and nothing else --
+# and the forwarder is handed the bare root: the app exports
+# DEEPSEEK_BASE_URL=http://127.0.0.1:<port>, the guest asks it for
+# /v1/messages, and the forwarder appends that to https://api.deepseek.com.
+# The real API answered 404 there, measured directly with this deployment's key:
+#   POST https://api.deepseek.com/v1/messages           -> 404
+#   POST https://api.deepseek.com/anthropic/v1/messages -> 200  (same key)
+# That is the whole failure on the terminal: "DeepSeek Messages request
+# failed (404)" while everything else looked healthy.
+#
+# config.baseURL outranks the environment variable in
+# @deepseek-ai/dsh-llm-deepseek (config ?? $DEEPSEEK_BASE_URL ?? default), and
+# the environment-file route is closed by construction -- dsh-app-boot lists
+# DEEPSEEK_BASE_URL in BOOTSTRAP_NAMES, "exact names no discovered file may
+# set" -- so this row is the supported place for the correction. The loopback
+# root is read from the environment at load time because the forwarder's port
+# is allocated at launch (from 31337 upward) and must not be baked in; outside
+# the app (tests, CI), the variable is absent and the adapter falls back to its
+# own default.
 - id: llm-deepseek
   config:
+    baseURL: !!js "process.env.DEEPSEEK_BASE_URL ? process.env.DEEPSEEK_BASE_URL + '/anthropic' : undefined"
     thinking: enabled
     reasoningEffort: max
     streamIdleTimeoutMs: 120000
