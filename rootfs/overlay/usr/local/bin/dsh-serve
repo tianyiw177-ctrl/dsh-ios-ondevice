@@ -26,6 +26,11 @@ cd "$DSH_WORKSPACE"
 
 # --expose-internals: cordis-plugin-hmr needs Node internals; the prebuilt
 # node-addon-require-builtin shim has no musl build, so use the flag instead.
+# --require boot-trace: stderr-only diagnostics for the startup stall seen on
+# device (the UI sometimes never gets its server). Prints a banner, one line
+# per HTTP listen(), and a CPU/memory/handle snapshot every 20 s for ten
+# minutes; inert otherwise, and it never writes to stdout.
 exec node --expose-internals \
+    --require /usr/local/share/dsh/boot-trace.cjs \
     /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js \
     web --host 127.0.0.1 --port "$PORT" "$@"

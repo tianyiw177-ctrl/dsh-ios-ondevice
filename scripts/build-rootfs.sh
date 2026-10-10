@@ -116,6 +116,21 @@ cp "$ROOT/rootfs/staging/package.json" stage/
 ( cd stage && npm install --os=linux --cpu=arm64 --libc=musl --ignore-scripts \
     --no-audit --no-fund --force 2>&1 | tail -150 )
 
+log "Office payload (bundled Python 3.12 + Office libraries, linux/arm64/musl)"
+# The upstream primary-runtime carrier, assembled for this guest: standalone
+# musl-linked Python plus the Office wheel set, laid out as the upstream SDK
+# application expects (primary-runtime/ with runtime.json + dependencies/, and
+# office-skills/ beside it). The Alpine guest is musl, so the payload uses
+# musllinux wheels and astral's musl Python -- the official desktop payload's
+# glibc build cannot load here. Versions and sha256s are pinned in
+# scripts/office-payload.lock.json; the download/layout logic lives in
+# scripts/build-office-payload.py next to it. Runs on the host (macOS runner
+# python3), not in the emulator.
+python3 "$ROOT/scripts/build-office-payload.py" \
+    --output "$WORK/office-payload" \
+    --cache "$WORK/office-payload-cache" \
+    --node-modules "$WORK/stage/node_modules"
+
 log "Guest phase 1: packages"
 guest_phase "guest phase 1" "DSH-PHASE1-OK" <<'EOF'
 set -e
@@ -190,6 +205,10 @@ overlay_ver=$(/usr/libexec/PlistBuddy -c 'Print :version' "$ISH_SRC/app/RootfsPa
     die "cannot read the RootfsPatch manifest version"
 mkdir -p payload/ish && printf '%s\n' "$overlay_ver" > payload/ish/overlay-version
 cp -R "$ROOT/rootfs/overlay/." payload/
+# The Office runtime rides in the same payload tree; the mount rows in
+# home.patch.yml point at /usr/local/share/dsh/office-runtime.
+mkdir -p payload/usr/local/share/dsh/office-runtime
+cp -R "$WORK/office-payload/." payload/usr/local/share/dsh/office-runtime/
 find payload -name '._*' -delete
 # BSD tar otherwise serialises extended attributes as AppleDouble `._*` files
 # when this payload is unpacked by the Linux guest.
@@ -246,6 +265,13 @@ fi
 # package.json plus the bundle in the profile's node_modules, and dsh's own
 # bootstrap generates the resolution shims for whatever the bundles name.
 mkdir -p /root/.dsh/profiles/tui
+# Three upstream experimental bundles ride along as well: agent-team (a lead
+# agent dispatching helper agents), auto-review (a second-model review pass),
+# and schedule (timed re-runs). They are ordinary packages in dsh's own
+# dependency list, so the staging step already installed them; naming them in
+# the bundles array is what mounts them. The boot check below imports every
+# bundle, so one that cannot load in this guest fails the build here instead of
+# surfacing on device.
 cat > /root/.dsh/profiles/tui/package.json <<'TUI_PROFILE_EOF'
 {
   "name": "dsh-profile-tui",
@@ -255,7 +281,10 @@ cat > /root/.dsh/profiles/tui/package.json <<'TUI_PROFILE_EOF'
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
-        "@brianynwu/dsh-tui"
+        "@brianynwu/dsh-tui",
+        "@deepseek-ai/dsh-experimental-agent-team-profile",
+        "@deepseek-ai/dsh-experimental-auto-review",
+        "@deepseek-ai/dsh-experimental-schedule-bundle"
       ],
       "patchReload": "startup"
     }
@@ -366,6 +395,27 @@ echo "step: slim"
 apk del --no-progress nodejs-dev python3 make g++ >/dev/null 2>&1 || true
 apk add --no-progress libstdc++ libgcc >/dev/null
 rm -rf /root/.npm /root/.cache /var/cache/apk/* /tmp/* /usr/local/lib/node_modules/node-pty/build/Release/obj.target
+# The bundled Office runtime, exercised for real on the final image (this runs
+# after the slim step so the deleted apk packages cannot hide a missing shared
+# library): this Python is a musl/arm64 build living outside apk, and the import
+# set covers every native library in the payload (numpy, pandas, lxml via
+# docx/pptx, Pillow via pptx, openpyxl on lxml+et_xmlfile). A payload that
+# cannot load here cannot serve the office skills on device, and failing the
+# build is how that is found.
+echo "step: office-payload"
+office_py=/usr/local/share/dsh/office-runtime/primary-runtime/dependencies/python/bin/python3
+if [ -x "\$office_py" ]; then
+    office_out=\$("\$office_py" -c 'import numpy, pandas, docx, pptx, openpyxl; print("OFFICE-IMPORTS-OK", numpy.__version__)' 2>&1 | tail -n 3 || true)
+    printf '%s\n' "\$office_out"
+    case "\$office_out" in
+        *OFFICE-IMPORTS-OK*) echo "office: the bundled Python imports its libraries" ;;
+        *) echo "error: the bundled office Python cannot import its libraries"; tui_ok=0 ;;
+    esac
+else
+    echo "error: the office runtime payload is missing from the image"
+    tui_ok=0
+fi
+ls -l /usr/local/share/dsh/office-runtime/primary-runtime/runtime.json 2>&1 || true
 # Never call the launcher by its bare name. The guest shell's PATH is not
 # guaranteed to carry /usr/local/bin, and under set -e a command-not-found
 # raised inside this substitution ended the whole phase: the 0.1.5-rc.2 build

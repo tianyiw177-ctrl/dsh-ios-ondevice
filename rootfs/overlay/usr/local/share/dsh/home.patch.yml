@@ -7,6 +7,35 @@
     - id: host-bridge
       name: /usr/local/lib/dsh-plugins/dsh-host-bridge/index.js
 
+# Workspace dependencies and Office authoring, served from the image's own
+# payload at /usr/local/share/dsh/office-runtime (see scripts/build-rootfs.sh,
+# which assembles it with scripts/build-office-payload.py).
+#
+# This is the stock pairing the upstream SDK application ships for the same
+# payload (dsh-sdk-app/cordis.patch.yml), minus the env-var indirection: the
+# payload lives at a fixed path in this image, so `source` is a literal. The
+# tool resolves the payload in place -- nothing is copied into the harness home
+# on first use -- and it only touches the disk when an agent actually calls
+# load_workspace_dependencies.
+#
+# skill-office carries cli: false deliberately. The LibreOffice Kit component is
+# the one piece of the upstream payload with no linux build (it ships win32,
+# darwin, and a wasm build that needs JIT), so on this guest the skills are
+# told "LibreOffice Kit is disabled in this deployment" and document -> PDF
+# rendering stays unavailable. Word/Excel/PowerPoint authoring itself is plain
+# python-docx/openpyxl/python-pptx and works.
+- insert:
+    - id: workspace-dependencies
+      name: '@deepseek-ai/dsh-tool-workspace-dependencies'
+      config:
+        source: /usr/local/share/dsh/office-runtime/primary-runtime
+
+    - id: skill-office
+      name: '@deepseek-ai/dsh-skill-office'
+      config:
+        assetRoot: /usr/local/share/dsh/office-runtime/office-skills
+        cli: false
+
 # Session telemetry is off at the row, not merely in config.
 #
 # dsh-base mounts `session-telemetry-otel` with mode FEEDBACK_ONLY and a
