@@ -1,3 +1,6 @@
+# 2026-10-10 upgrade to dsh 0.2.0-rc.2: dsh-agent-presets was split into
+#   dsh-agent-preset-registry + per-preset declarations; the row below mounts the
+#   registry (default: standard, matching the desktop default).
 # Profile layer for the `tui` terminal surface, applied after the dsh-tui
 # bundle (profiles/tui/cordis.patch.yml is this file, installed by
 # scripts/build-rootfs.sh).
@@ -150,9 +153,9 @@
 # agent.cordis.yml names were verified present in this image before enabling it.
 - insert:
     - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
+      name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
-        default: security
+        default: standard
 
 # tmux-context is off: it keeps a tmux server alive to describe the multiplexer
 # around the agent, which costs a resident process in a guest that iOS already

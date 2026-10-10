@@ -24,12 +24,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Only the version this app actually ships. 0.1.0-rc.7 ("pinned") is the
-        # repository's historical default, but the terminal bundle
-        # (@brianynwu/dsh-tui) peers on dsh ^0.1.5-rc.1, so 0.1.5-rc.2 is the
-        # coherent pairing -- and the pinned job also spent 10-20 minutes per run
-        # stuck in guest phase 3 (npx fetching node-gyp over the emulator's
-        # partly-unreachable network) for a build nothing here installs.
+        # 2026-10-10: upgraded 0.1.5-rc.2 -> 0.2.0-rc.2 (parity with the desktop
+        # build). The tui bundle (@brianynwu/dsh-tui@0.2.0) declares 0.1.x peers,
+        # so the image ships a per-profile compatibility exemption
+        # (root/.dsh/profiles/tui/compatibility.json, granted via the official
+        # `dsh plugin allow-version ... --accept-risk` mechanism), and the tui
+        # layer in tui.patch.yml was adapted for the 0.2.x agent-preset-registry
+        # split (dsh-agent-presets no longer exists).
         #
         # 本副本的改动：一次构建两个变体（fail-fast: false，互不影响）：
         #   cli —— 终端 TUI 版（原工作流默认产物，已多次实测跑通）
@@ -37,10 +38,10 @@ jobs:
         #          头部注释给出的 xcodebuild 命令行覆盖方式构建）
         include:
           - tag: cli
-            dsh: 0.1.5-rc.2
+            dsh: 0.2.0-rc.2
             variant: cli
           - tag: web
-            dsh: 0.1.5-rc.2
+            dsh: 0.2.0-rc.2
             variant: web
 
     steps:
