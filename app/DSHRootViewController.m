@@ -75,7 +75,7 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
 
 - (void)userContentController:(WKUserContentController *)controller
       didReceiveScriptMessage:(WKScriptMessage *)message {
-    NSString *body = [message.body isKindOfClass:NSString.class] ? (NSString *) message.body : message.body.description;
+    NSString *body = [message.body isKindOfClass:NSString.class] ? (NSString *) message.body : [message.body description];
     if (body.length == 0)
         return;
     if (body.length > 600)
