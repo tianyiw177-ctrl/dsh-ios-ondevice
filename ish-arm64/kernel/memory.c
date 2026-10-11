@@ -72,8 +72,38 @@ static void pt_node_free(void *node, int level) {
     free(n);
 }
 
+// [T-ish-mm-teardown-lock-trap] The lock operations at the end of mem_destroy
+// are best-effort, because on this path a failed operation is not corruption.
+//
+// The shared write_wrlock/write_wrunlock helpers trap on any inconsistency --
+// the right call everywhere the lock protects live state, and the wrong one at
+// the end of a teardown: everything this lock covers is being freed together
+// with the mm, and the same CLONE_VM exit_group race the asbestos null-out
+// below documents means a second teardown path can reach these operations
+// after the first one released or destroyed the lock. Measured on device
+// 2026-10-11: reaping a killed node harness mid-load produced a BRK at
+// _mem_destroy + 0x12c -- the trap in write_wrunlock's cold path
+// (pthread_rwlock_unlock returned nonzero) -- and killed the whole app, since
+// the guest runs inside the app's process. A guest process exiting must never
+// be able to do that.
+//
+// So the acquire is a bounded try loop that gives up rather than spinning
+// forever on a destroyed lock, and the release records nothing: a racing
+// teardown finding the lock already free is the expected shape of this race,
+// not a state to die on.
+static void mem_destroy_acquire(struct mem *mem) {
+    for (int i = 0; i < 500; i++) {
+        if (pthread_rwlock_trywrlock(&mem->lock.l) == 0) {
+            mem->lock.val = -1;
+            mem->lock.file = NULL;
+            return;
+        }
+        sched_yield();
+    }
+}
+
 void mem_destroy(struct mem *mem) {
-    write_wrlock(&mem->lock);
+    mem_destroy_acquire(mem);
     pt_unmap_always(mem, 0, MEM_PAGES);
     while (mem->reservations) {
         struct mem_reservation *r = mem->reservations;
@@ -86,8 +116,11 @@ void mem_destroy(struct mem *mem) {
     mem->mmu.asbestos = NULL;
     pt_node_free(mem->pgdir, 0);
     mem->pgdir = NULL;
-    write_wrunlock(&mem->lock);
-    wrlock_destroy(&mem->lock);
+    // Best-effort release; see the note above mem_destroy_acquire.
+    mem->lock.val = mem->lock.line = mem->lock.pid = 0;
+    mem->lock.file = NULL;
+    (void) pthread_rwlock_unlock(&mem->lock.l);
+    (void) pthread_rwlock_destroy(&mem->lock.l);
 }
 
 // Navigate 4-level page table to find L3 entry, creating intermediate nodes as needed

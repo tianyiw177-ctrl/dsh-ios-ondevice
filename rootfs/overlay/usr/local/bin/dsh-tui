@@ -713,47 +713,28 @@ while :; do
     # rebuilt, not at anything inside the harness. The preload below records the
     # order of events (beforeExit, stdin end/close, signals) so the next exit has
     # a cause attached instead of a theory.
-    # Diagnostic twin: a plain node process, no terminal attached, started
-    # alongside the harness.
+    # The two diagnostic twins that used to be started here are gone, and their
+    # absence is deliberate.
     #
-    # The question it answers is whether the killer is inside the harness or
-    # outside it. This process cannot leak, cannot exit on its own, and has no tty
-    # to lose, so if it dies at the same cadence then whatever kills the harness
-    # kills everything in the guest; if it outlives the harness, the harness is
-    # the target specifically.
-    (
-        # Its own process group, so a kill aimed at the foreground group takes the
-        # harness and leaves this one alone.
-        #
-        # An empty LD_PRELOAD is what suppresses the kernel's injection: exec.c
-        # adds /lib/zero_free.so only when the program is named `node` AND no
-        # LD_PRELOAD is already in the environment. So this twin runs without the
-        # library, and the one below runs with it. Everything else about them is
-        # identical, which is what makes them a comparison rather than two more
-        # processes that died.
-        if command -v setsid >/dev/null 2>&1; then
-            setsid env LD_PRELOAD= node -e 'const fs = require("fs"); const p = process.env.DSH_HOME + "/twin.log"; fs.appendFileSync(p, new Date().toISOString() + "  twin start node pid=" + process.pid + "\n"); fs.writeFileSync(process.env.DSH_HOME + "/.witness-no.pid", String(process.pid)); process.on("exit", (c) => fs.appendFileSync(p, new Date().toISOString() + "  twin exit code=" + c + "\n")); setInterval(() => {}, 3600000);' >/dev/null 2>&1
-        else
-            LD_PRELOAD= node -e 'const fs = require("fs"); const p = process.env.DSH_HOME + "/twin.log"; fs.appendFileSync(p, new Date().toISOString() + "  twin start node pid=" + process.pid + "\n"); fs.writeFileSync(process.env.DSH_HOME + "/.witness-no.pid", String(process.pid)); process.on("exit", (c) => fs.appendFileSync(p, new Date().toISOString() + "  twin exit code=" + c + "\n")); setInterval(() => {}, 3600000);' >/dev/null 2>&1
-        fi
-    ) &
-    (
-        # The same thing WITH /lib/zero_free.so, the library the kernel injects
-        # into anything named `node`. If this one dies while the other lives, that
-        # library is what has been killing the harness.
-        if command -v setsid >/dev/null 2>&1; then
-            setsid env LD_PRELOAD=/lib/zero_free.so node -e 'const fs = require("fs"); const p = process.env.DSH_HOME + "/twin.log"; fs.appendFileSync(p, new Date().toISOString() + "  twin-preload start node pid=" + process.pid + "\n"); fs.writeFileSync(process.env.DSH_HOME + "/.witness-pre.pid", String(process.pid)); process.on("exit", (c) => fs.appendFileSync(p, new Date().toISOString() + "  twin-preload exit code=" + c + "\n")); setInterval(() => {}, 3600000);' >/dev/null 2>&1
-        fi
-    ) &
+    # They answered their question -- whether a process that cannot exit on its
+    # own dies at the same cadence as the harness -- and what they cost is what
+    # matters now: measured on device (2026-10-11), a bare node in this guest is
+    # ~716 MB resident, so the pair of them sat next to an ~840 MB harness as
+    # 1.4 GB of pure diagnostics inside a guest whose memory the app's own note
+    # says iOS caps ("iOS kills the app once its memory crosses the line"). On
+    # the same capture, both twins were killed off inside a minute while the
+    # harness lived on -- the guest is under real memory pressure, and the twins
+    # were a large part of it.
+    #
+    # The per-round verdict loop below is gone with them (its pid files simply
+    # no longer appear, which it logged as "gone" every round). The by-name
+    # sampler stays: it needs no extra process, and it recorded the killing.
     # Second-grain record of every node process in the guest.
     #
-    # The per-round check only says a witness was already gone by the time the
-    # harness ended, which leaves minutes of slack and cannot tell one death from
-    # two. This samples by name instead, so it covers the harness as well as the
-    # witnesses, and it records the vitals that would explain a death: process
-    # state, thread count and resident size. A process the kernel reaped for
-    # memory, or one that is sitting in D state first, looks different here from
-    # one that was shot.
+    # It samples by name, so it covers every node in the guest, and it records
+    # the vitals that would explain a death: process state, thread count and
+    # resident size. A process the kernel reaped for memory, or one that is
+    # sitting in D state first, looks different here from one that was shot.
     (
         while :; do
             for pid in $(ps 2>/dev/null | awk '/[n]ode/ {print $1}'); do
@@ -787,21 +768,8 @@ while :; do
         kill -9 "$pid" 2>/dev/null || true
     done
 
-    # Round-level verdict on the witnesses. They are deliberately NOT killed here:
-    # whether a node process outlives the harness is the whole question, and a
-    # cleanup that runs at the same instant the harness dies would answer it
-    # wrongly. The watcher above keeps sampling them by name.
-    for pair in "no:.witness-no.pid" "pre:.witness-pre.pid"; do
-        label=${pair%%:*}
-        pidfile=${pair#*:}
-        pid=$(cat "$DSH_HOME/$pidfile" 2>/dev/null)
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            printf '%s  round %s: %s pid=%s STILL ALIVE when the harness died\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$round" "$label" "$pid" >>"$DSH_HOME/twin.log"
-        else
-            printf '%s  round %s: %s pid=%s gone\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$round" "$label" "$pid" >>"$DSH_HOME/twin.log"
-        fi
-    done
-    rm -f "$DSH_HOME/.witness-no.pid" "$DSH_HOME/.witness-pre.pid"
+    # (The round-level witness verdict lived here. It is gone with the twins --
+    # see the note where they were started -- and nothing else depended on it.)
     kill "$watcher" 2>/dev/null
 
     # Post-mortem: the kernel's version and the process table at the moment of
