@@ -50,6 +50,42 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
 @property (nonatomic) NSMutableDictionary<NSValue *, NSURL *> *downloadDestinations;
 @end
 
+#pragma mark - The page's own errors, where the log can see them
+
+/// Relays the page's console errors, uncaught exceptions and rejected
+/// promises into the app log, so the Server Log screen can show and share
+/// the client's own words.
+///
+/// Why this exists: every failure of the web client that was ever reported
+/// from the device -- a transport chip stuck on "reconnecting", a blank
+/// render, a silent dead click -- happens entirely inside the WKWebView,
+/// where the app had no view of it at all. Measured 2026-10-11: the server
+/// log said "ready", the client said "重新连接中…" forever, and the two facts
+/// sat in different worlds with no shared evidence. This bridge is the
+/// missing witness: client errors land in the same log, timestamped and
+/// shareable, next to the app's and the server's lines.
+///
+/// Deliberately holds nothing: WKUserContentController retains its message
+/// handlers, so this object must not point back at the view controller (that
+/// would be a retain cycle through the web view's configuration).
+@interface DSHWebConsoleBridge : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation DSHWebConsoleBridge
+
+- (void)userContentController:(WKUserContentController *)controller
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    NSString *body = [message.body isKindOfClass:NSString.class] ? (NSString *) message.body : message.body.description;
+    if (body.length == 0)
+        return;
+    if (body.length > 600)
+        body = [body substringToIndex:600];
+    for (NSString *line in [body componentsSeparatedByString:@"\n"])
+        [DSHHarness.shared.log append:[NSString stringWithFormat:@"[web] %@", line]];
+}
+
+@end
+
 @implementation DSHRootViewController
 
 - (void)viewDidLoad {
@@ -86,6 +122,27 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
     config.websiteDataStore = WKWebsiteDataStore.defaultDataStore;
     config.applicationNameForUserAgent = kDSHUserAgentSuffix;
     config.defaultWebpagePreferences.allowsContentJavaScript = YES;
+    // The page's console/exception bridge -- see DSHWebConsoleBridge above.
+    // Injected at document start into every frame, so it is armed before the
+    // client's first script runs; console.log stays out on purpose (too noisy),
+    // error/warn and uncaught failures are exactly the signal.
+    static NSString *const kConsoleBridgeScript =
+        @"(function(){"
+         "function send(t,args){try{window.webkit.messageHandlers.dshConsole.postMessage(t+': '+args.map(function(a){"
+         "if(typeof a==='string')return a;"
+         "if(a&&a.stack)return a.stack;"
+         "if(a&&a.message)return a.message;"
+         "try{return JSON.stringify(a);}catch(e){return String(a);}}).join(' '));}catch(e){}}"
+         "['error','warn'].forEach(function(lv){var o=console[lv];"
+         "console[lv]=function(){send(lv,Array.prototype.slice.call(arguments));return o.apply(console,arguments);};});"
+         "window.addEventListener('error',function(e){send('onerror',[e.message+' @'+(e.filename||'')+':'+(e.lineno||0)]);});"
+         "window.addEventListener('unhandledrejection',function(e){"
+         "send('unhandledrejection',[String((e.reason&&(e.reason.stack||e.reason.message))||e.reason)]);});"
+         "})();";
+    [config.userContentController addUserScript:[[WKUserScript alloc] initWithSource:kConsoleBridgeScript
+                                                                       injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                                    forMainFrameOnly:NO]];
+    [config.userContentController addScriptMessageHandler:[DSHWebConsoleBridge new] name:@"dshConsole"];
     self.webView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
     self.webView.navigationDelegate = self;
     self.webView.UIDelegate = self;
