@@ -193,6 +193,42 @@ if [ -r /proc/ish/documents ]; then
     fi
 fi
 
+# Diagnostics, shipped out of the guest.
+#
+# The app keeps its own log behind a UI this build does not expose (the
+# terminal-only surface has no log screen), and the guest keeps several of its
+# own -- tui.err (the harness's stderr), takeover.log, watch.log, tui-exits.log
+# -- none of which can be read without a shell this build does not have either.
+# Measured on device: boots that die during startup leave every one of those
+# files behind, intact and unreadable.
+#
+# Documents is the one channel the user actually holds: it is a real mount of
+# the app's Documents folder, which the Files app can open, so this best-effort
+# copy loop puts the evidence where a bug report can reach it. It starts before
+# the harness does and copies what exists on every pass, so logs written just
+# before a crash are already on the host side by the NEXT launch's first pass --
+# the race against a dying process is not one this has to win.
+(
+    host_docs=$(cat /proc/ish/documents 2>/dev/null || true)
+    if [ -n "$host_docs" ]; then
+        mkdir -p "$HOST_DOCS_MNT" 2>/dev/null || true
+        mount -t real "$host_docs" "$HOST_DOCS_MNT" 2>/dev/null || true
+        while :; do
+            mkdir -p "$HOST_DOCS_MNT/dsh-diag" 2>/dev/null || true
+            for f in tui.err tui-exits.log takeover.log watch.log twin.log \
+                     launcher-starts.log memory.log kernel.log heartbeat.log \
+                     probe-selftest.log; do
+                if [ -f "$DSH_HOME/$f" ] && ! cmp -s "$DSH_HOME/$f" "$HOST_DOCS_MNT/dsh-diag/$f" 2>/dev/null; then
+                    cp "$DSH_HOME/$f" "$HOST_DOCS_MNT/dsh-diag/$f" 2>/dev/null || true
+                fi
+            done
+            ps >"$HOST_DOCS_MNT/dsh-diag/ps.txt.new" 2>/dev/null &&
+                mv "$HOST_DOCS_MNT/dsh-diag/ps.txt.new" "$HOST_DOCS_MNT/dsh-diag/ps.txt" 2>/dev/null || true
+            sleep 10
+        done
+    fi
+) &
+
 # Say something before handing the screen to dsh. The terminal is already black
 # when this script starts, and dsh takes a while to paint its first frame (node
 # boots, ~250 plugin packages load, sessions are restored). Without this line the
