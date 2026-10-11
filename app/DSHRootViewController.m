@@ -44,6 +44,7 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
 /// The harness's own terminal front door, a script in the guest.
 @property (nonatomic, copy) NSArray<NSString *> *cliCommand;
 @property (nonatomic) uint16_t loadedPort;
+@property (nonatomic, copy, nullable) NSString *loadedURLString;
 @property (nonatomic) BOOL pageLoaded;
 @property (nonatomic) NSUInteger pageLoadGeneration;
 @property (nonatomic) NSMutableDictionary<NSValue *, NSURL *> *downloadDestinations;
@@ -63,6 +64,7 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
 
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     [nc addObserver:self selector:@selector(harnessStateChanged:) name:DSHHarnessStateDidChangeNotification object:nil];
+    [nc addObserver:self selector:@selector(browserURLDidChange:) name:DSHHarnessBrowserURLDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(logChanged:) name:DSHLogBufferDidChangeNotification object:nil];
     [nc addObserver:self selector:@selector(bootStateChanged:) name:DSHBootStateDidChangeNotification object:nil];
     [self observeActivity];
@@ -283,12 +285,20 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
             [self.overlay setProgressStartedAt:nil expected:0];
             self.pageLoaded = NO;
             break;
-        case DSHHarnessStateReady:
-            if (!self.pageLoaded || self.loadedPort != h.port)
+        case DSHHarnessStateReady: {
+            // Reload when the page on screen is not the page the harness
+            // currently wants loaded. The tokenized URL arrives asynchronously
+            // (see DSHHarnessBrowserURLDidChangeNotification), so the first
+            // load is usually the tokenless one; comparing the URL strings is
+            // what turns that first 401-blank page into a second, real load.
+            NSURL *wanted = DSHHarness.shared.browserURL ?: DSHHarness.shared.baseURL;
+            if (!self.pageLoaded || self.loadedPort != h.port ||
+                ![wanted.absoluteString isEqualToString:self.loadedURLString])
                 [self loadHarness];
             else
                 [self.overlay hide];
             break;
+        }
         case DSHHarnessStateFailed:
             [self.overlay showFailure:h.lastError ?: @"The harness could not be started."];
             break;
@@ -299,17 +309,31 @@ static NSString *const kDSHUserAgentSuffix = @" DSH-iOS/1.0";
 }
 
 - (void)loadHarness {
-    NSURL *url = DSHHarness.shared.baseURL;
+    // Prefer the tokenized URL the server prints for itself; the bare loopback
+    // root answers 401 (a blank page) whenever the harness speaks the 0.2
+    // token protocol. See DSHHarness.browserURL.
+    NSURL *url = DSHHarness.shared.browserURL ?: DSHHarness.shared.baseURL;
     if (url == nil)
         return;
     [self.overlay showStarting:@"Loading the interface…"];
     [self.overlay setProgressStartedAt:nil expected:0];
     self.loadedPort = DSHHarness.shared.port;
+    self.loadedURLString = url.absoluteString;
     self.pageLoaded = NO;
     self.pageLoadGeneration++;
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     [self.webView loadRequest:req];
+}
+
+/// The harness URL became known (or changed) after the page was already asked
+/// to load; reload onto it. Same state, same port -- only the URL differs.
+- (void)browserURLDidChange:(NSNotification *)notification {
+    if (DSHHarness.shared.state != DSHHarnessStateReady)
+        return;
+    if ([DSHHarness.shared.browserURL.absoluteString isEqualToString:self.loadedURLString])
+        return;
+    [self loadHarness];
 }
 
 - (void)sceneDidBecomeActive {

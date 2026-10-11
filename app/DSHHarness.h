@@ -24,6 +24,10 @@ typedef NS_ENUM(NSInteger, DSHHarnessState) {
 NSString *DSHHarnessStateName(DSHHarnessState state);
 
 extern NSNotificationName const DSHHarnessStateDidChangeNotification;
+/// Posted when `browserURL` is first captured (or replaced) from the server's
+/// own output. The web surface listens for it and reloads: the initial load,
+/// made the moment the probe answers, races the "dsh web: http…" line.
+extern NSNotificationName const DSHHarnessBrowserURLDidChangeNotification;
 
 /// Everything DSHHarness needs from the emulator, so tests can fake it.
 @protocol DSHGuestProcessLauncher <NSObject>
@@ -50,6 +54,15 @@ extern NSNotificationName const DSHHarnessStateDidChangeNotification;
 @property (nonatomic, readonly) uint16_t port;
 /// http://127.0.0.1:<port>/ once a port is chosen (may be nil before start).
 @property (nonatomic, readonly, nullable) NSURL *baseURL;
+/// The authenticated URL `dsh web` prints for itself ("dsh web: http://…/?token=…"),
+/// captured from the server's own stdout. Nil until that line appears.
+///
+/// The web surface must load THIS URL, not baseURL: since dsh 0.2 the server
+/// mints a per-process random launch token and answers 401 to a tokenless "/",
+/// which renders as a blank page — the white screen this app kept showing. The
+/// token cannot be configured from outside the process, so the printed URL is
+/// the only copy the app can have; see captureBrowserURLFromLine: in the .m.
+@property (nonatomic, readonly, copy, nullable) NSURL *browserURL;
 @property (nonatomic, readonly) DSHLogBuffer *log;
 @property (nonatomic, readonly) NSUInteger restartCount;
 @property (nonatomic, readonly, nullable) NSString *lastError;

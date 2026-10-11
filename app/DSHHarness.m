@@ -10,6 +10,7 @@
 #import "DSHStartupMetrics.h"
 
 NSNotificationName const DSHHarnessStateDidChangeNotification = @"DSHHarnessStateDidChangeNotification";
+NSNotificationName const DSHHarnessBrowserURLDidChangeNotification = @"DSHHarnessBrowserURLDidChangeNotification";
 static NSString *const kExpectedStartupKey = @"DSHExpectedStartupDuration";
 static const NSTimeInterval kDefaultExpectedStartup = 25;
 static NSString *const kRecentFailuresKey = @"DSHHarnessRecentFailures.1";
@@ -38,6 +39,7 @@ NSString *DSHHarnessStateName(DSHHarnessState state) {
 @property (nonatomic) id<DSHGuestProcessLauncher> launcher;
 @property (nonatomic, readwrite) DSHHarnessState state;
 @property (nonatomic, readwrite) uint16_t port;
+@property (nonatomic, readwrite, copy, nullable) NSURL *browserURL;
 @property (nonatomic, readwrite) DSHLogBuffer *log;
 @property (nonatomic, readwrite) NSUInteger restartCount;
 @property (nonatomic, readwrite, nullable) NSString *lastError;
@@ -94,6 +96,43 @@ NSString *DSHHarnessStateName(DSHHarnessState state) {
     if (self.port == 0)
         return nil;
     return [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%u/", self.port]];
+}
+
+/// Capture the tokenized browser URL from the server's own startup line.
+///
+/// Since dsh 0.2, `dsh web` mints a per-process random launch token and answers
+/// 401 to a tokenless "/" -- measured directly against the served process:
+///   GET /                      -> 401 "dsh web authentication required"
+///   GET /?token=<launch token> -> 303 to "./" and a signed cookie for the rest
+/// The token is randomBytes-derived per launch and has no configuration hook,
+/// so the URL the process prints is the only copy the app can ever have -- and
+/// it prints it on stdout, which is the stream this class already receives.
+/// Parsing it here is what keeps the web surface loadable: the WKWebView used
+/// to be pointed at the tokenless baseURL, the 401 rendered as a blank page,
+/// and the app showed a white screen over a perfectly healthy server.
+///
+/// Only a line that both starts with the "dsh web: " marker and carries
+/// "http://" is considered (the sibling line is prose, not a URL), and the URL
+/// must point back at our own loopback port -- anything else is ignored.
+- (void)captureBrowserURLFromLine:(NSString *)line {
+    NSRange marker = [line rangeOfString:@"dsh web: "];
+    if (marker.location == NSNotFound)
+        return;
+    NSString *tail = [line substringFromIndex:NSMaxRange(marker)];
+    if (![tail hasPrefix:@"http://"])
+        return;
+    NSRange space = [tail rangeOfString:@" "];
+    NSString *urlString = space.location == NSNotFound ? tail : [tail substringToIndex:space.location];
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (url == nil || url.host.length == 0 || url.port == nil)
+        return;
+    if (![url.host isEqualToString:@"127.0.0.1"] || url.port.unsignedShortValue != self.port)
+        return;
+    if ([url.absoluteString isEqualToString:self.browserURL.absoluteString])
+        return;
+    self.browserURL = url;
+    [self.log append:[NSString stringWithFormat:@"[dsh-ios] web launch URL captured (token) on port %u", self.port]];
+    [NSNotificationCenter.defaultCenter postNotificationName:DSHHarnessBrowserURLDidChangeNotification object:self];
 }
 
 - (void)setState:(DSHHarnessState)state {
@@ -167,6 +206,8 @@ NSString *DSHHarnessStateName(DSHHarnessState state) {
     self.port = port;
     self.lastError = nil;
     self.lastLaunchAt = NSDate.date;
+    // A new process mints a new launch token, so the previous URL is dead.
+    self.browserURL = nil;
     self.state = DSHHarnessStateStarting;
 
     NSMutableDictionary *env = [self.extraEnvironment mutableCopy];
@@ -178,6 +219,7 @@ NSString *DSHHarnessStateName(DSHHarnessState state) {
                                     arguments:@[]
                                   environment:env
                                          line:^(NSString *line, BOOL isStdErr) {
+        [weakSelf captureBrowserURLFromLine:line];
         [weakSelf.log append:line];
     } exit:^(int exitCode) {
         dispatch_async(dispatch_get_main_queue(), ^{
